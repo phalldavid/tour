@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Virtual Tour</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/pannellum/2.5.6/pannellum.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pannellum/2.5.6/pannellum.js"></script>
+<style>
+  :root { --bg:#0e1116; --fg:#f4f6f8; --pill:rgba(14,17,22,.62); --accent:#4cc3a6; }
+  html, body {
+    margin:0; padding:0; width:100vw; height:100vh; overflow:hidden;
+    background:var(--bg); color:var(--fg); overscroll-behavior:none;
+    font:15px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  @supports (height:100dvh) { html, body { height:100dvh; } }
+  #panorama { width:100vw; height:100%; }
+
+  /* Our own title replaces Pannellum's top-left title box */
+  .pnlm-panorama-info { display:none !important; }
+
+  #room-title {
+    position:fixed; z-index:10; left:50%; transform:translateX(-50%);
+    top:calc(env(safe-area-inset-top, 0px) + 12px);
+    max-width:80vw; padding:7px 16px; border-radius:999px;
+    background:var(--pill); -webkit-backdrop-filter:blur(8px); backdrop-filter:blur(8px);
+    font-weight:600; letter-spacing:.01em; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+    pointer-events:none; opacity:0; transition:opacity .35s ease;
+  }
+  #room-title.visible { opacity:1; }
+
+  #status {
+    position:fixed; inset:0; z-index:20; display:flex; align-items:center; justify-content:center;
+    padding:24px; background:var(--bg); text-align:center;
+  }
+  #status[hidden] { display:none; }
+  #status .box { max-width:320px; }
+  #status p { margin:0 0 16px; }
+  #status.error p { color:#ffb4a8; }
+  #status button {
+    margin:4px; padding:10px 18px; border:0; border-radius:10px; cursor:pointer;
+    background:var(--accent); color:#06231c; font:inherit; font-weight:600;
+  }
+  #status button.secondary { background:transparent; color:var(--fg); border:1px solid rgba(255,255,255,.3); }
+  #status button:focus-visible { outline:2px solid var(--fg); outline-offset:2px; }
+  #status button[hidden] { display:none; }
+</style>
+</head>
+<body>
+  <div id="panorama"></div>
+  <div id="room-title" aria-live="polite"></div>
+  <div id="status" role="status">
+    <div class="box">
+      <p id="status-msg">Loading tour…</p>
+      <button id="retry-btn" hidden>Try again</button>
+      <button id="demo-btn" class="secondary" hidden>Open demo tour</button>
+    </div>
+  </div>
+
+<script>
+(function () {
+  'use strict';
+
+  // ---- Telegram Mini App setup (runs immediately) ----
+  const tg = window.Telegram && window.Telegram.WebApp;
+  if (tg) {
+    tg.ready();
+    tg.expand();
+    // Dragging the panorama downward must not close the Mini App (Bot API 7.7+).
+    if (typeof tg.disableVerticalSwipes === 'function') tg.disableVerticalSwipes();
+  }
+
+  // ---- Embedded fallback demo (used when no ?config= is given) ----
+  const DEMO_TOUR = {
+    default: { firstScene: 'observatory', sceneFadeDuration: 1000, hfov: 100 },
+    scenes: {
+      observatory: {
+        title: 'Room 1 · Observatory',
+        type: 'equirectangular',
+        panorama: 'https://pannellum.org/images/alma.jpg',
+        yaw: 0, pitch: 0,
+        hotSpots: [
+          { type: 'scene', pitch: -4, yaw: 117, text: 'Go to Room 2',
+            sceneId: 'mountain', targetYaw: -23, targetPitch: 2 }
+        ]
+      },
+      mountain: {
+        title: 'Room 2 · Mountain view',
+        type: 'equirectangular',
+        panorama: 'https://pannellum.org/images/cerro-toco-0.jpg',
+        yaw: 0, pitch: 0,
+        hotSpots: [
+          { type: 'scene', pitch: -2, yaw: 160, text: 'Back to Room 1',
+            sceneId: 'observatory', targetYaw: 117, targetPitch: 0 }
+        ]
+      }
+    }
+  };
+
+  // ---- UI helpers ----
+  const $ = (id) => document.getElementById(id);
+  const statusEl = $('status'), statusMsg = $('status-msg'), titleEl = $('room-title');
+  const retryBtn = $('retry-btn'), demoBtn = $('demo-btn');
+  let viewer = null;
+  let usingConfig = false;
+
+  function showStatus(msg, isError) {
+    statusMsg.textContent = msg;
+    statusEl.classList.toggle('error', !!isError);
+    retryBtn.hidden = !isError;
+    demoBtn.hidden = !(isError && usingConfig);
+    statusEl.hidden = false;
+  }
+  function hideStatus() { statusEl.hidden = true; }
+
+  function updateTitle(sceneId) {
+    if (!viewer || !sceneId) return;
+    const scene = (viewer.getConfig().scenes || {})[sceneId] || {};
+    const text = scene.title || sceneId;
+    titleEl.classList.remove('visible');
+    setTimeout(() => { titleEl.textContent = text; titleEl.classList.add('visible'); }, 120);
+  }
+
+  // ---- Config loading ----
+  function getConfigUrl() {
+    const raw = new URLSearchParams(window.location.search).get('config');
+    if (!raw) return null;
+    let url;
+    try { url = new URL(raw, window.location.href); }   // relative paths work too
+    catch (e) { throw new Error('The tour link is not a valid URL.'); }
+    if (url.protocol !== 'https:' && url.protocol !== 'http:') {
+      throw new Error('The tour link must start with https://');
+    }
+    return url.href;
+  }
+
+  async function fetchTour(url) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 15000);
+    let res;
+    try {
+      res = await fetch(url, { signal: ctrl.signal, headers: { Accept: 'application/json' }, cache: 'no-cache' });
+    } catch (e) {
+      throw new Error(e.name === 'AbortError'
+        ? 'The tour file took too long to load.'
+        : 'Could not load the tour file. Check the link, and make sure the server allows cross-origin (CORS) requests.');
+    } finally { clearTimeout(timer); }
+    if (!res.ok) throw new Error('The tour file returned an error (HTTP ' + res.status + ').');
+    try { return await res.json(); }
+    catch (e) { throw new Error('The tour file is not valid JSON.'); }
+  }
+
+  // Validate and clean the tour so Pannellum never receives a broken reference.
+  function normalizeTour(input) {
+    if (!input || typeof input !== 'object' || !input.scenes || typeof input.scenes !== 'object') {
+      throw new Error('The tour file has no "scenes" object.');
+    }
+    const tour = JSON.parse(JSON.stringify(input));
+    const ids = Object.keys(tour.scenes);
+    if (!ids.length) throw new Error('The tour has no scenes.');
+
+    ids.forEach((id) => {
+      const scene = tour.scenes[id];
+      if (!scene || typeof scene.panorama !== 'string' || !scene.panorama) {
+        throw new Error('Scene "' + id + '" has no panorama image.');
+      }
+      scene.hotSpots = (Array.isArray(scene.hotSpots) ? scene.hotSpots : []).filter((hs) => {
+        if (!hs || typeof hs !== 'object') return false;
+        if (hs.URL && !/^https?:\/\//i.test(hs.URL)) delete hs.URL;   // no javascript: links
+        if (hs.type === 'scene' && !tour.scenes[hs.sceneId]) {
+          console.warn('Dropped hotspot pointing to unknown scene:', hs.sceneId);
+          return false;
+        }
+        return true;
+      });
+    });
+
+    tour.default = tour.default || {};
+    if (!tour.scenes[tour.default.firstScene]) tour.default.firstScene = ids[0];
+    if (tour.default.sceneFadeDuration == null) tour.default.sceneFadeDuration = 1000;
+    return tour;
+  }
+
+  function startViewer(tour) {
+    viewer = pannellum.viewer('panorama', Object.assign({}, tour, { autoLoad: true }));
+    viewer.on('load', () => { hideStatus(); updateTitle(viewer.getScene()); });
+    viewer.on('scenechange', (sceneId) => updateTitle(sceneId));
+    viewer.on('error', (msg) => showStatus(
+      'The panorama could not be displayed: ' + msg + ' (images must be served with CORS headers and fit your device’s texture limit).', true));
+  }
+
+  async function init(forceDemo) {
+    if (viewer) { try { viewer.destroy(); } catch (e) {} viewer = null; }
+    titleEl.classList.remove('visible');
+    showStatus('Loading tour…', false);
+    try {
+      const configUrl = forceDemo ? null : getConfigUrl();
+      usingConfig = !!configUrl;
+      const tour = configUrl ? await fetchTour(configUrl) : DEMO_TOUR;
+      startViewer(normalizeTour(tour));
+    } catch (err) {
+      console.error(err);
+      showStatus(err.message, true);
+    }
+  }
+
+  retryBtn.addEventListener('click', () => init(false));
+  demoBtn.addEventListener('click', () => { usingConfig = false; init(true); });
+
+  init(false);
+})();
+</script>
+</body>
+</html>

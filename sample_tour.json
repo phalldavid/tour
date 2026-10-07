@@ -1,0 +1,45 @@
+{
+  "default": {
+    "firstScene": "observatory",
+    "sceneFadeDuration": 1000,
+    "hfov": 100
+  },
+  "scenes": {
+    "observatory": {
+      "title": "Room 1 · Observatory",
+      "type": "equirectangular",
+      "panorama": "https://pannellum.org/images/alma.jpg",
+      "yaw": 0,
+      "pitch": 0,
+      "hotSpots": [
+        {
+          "type": "scene",
+          "pitch": -4,
+          "yaw": 117,
+          "text": "Go to Room 2",
+          "sceneId": "mountain",
+          "targetYaw": -23,
+          "targetPitch": 2
+        }
+      ]
+    },
+    "mountain": {
+      "title": "Room 2 · Mountain view",
+      "type": "equirectangular",
+      "panorama": "https://pannellum.org/images/cerro-toco-0.jpg",
+      "yaw": 0,
+      "pitch": 0,
+      "hotSpots": [
+        {
+          "type": "scene",
+          "pitch": -2,
+          "yaw": 160,
+          "text": "Back to Room 1",
+          "sceneId": "observatory",
+          "targetYaw": 117,
+          "targetPitch": 0
+        }
+      ]
+    }
+  }
+}
