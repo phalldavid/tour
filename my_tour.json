@@ -1,0 +1,23 @@
+{
+  "default": { "firstScene": "test", "sceneFadeDuration": 1000 },
+  "scenes": {
+    "test": {
+      "title": "Testing room",
+      "type": "equirectangular",
+      "panorama": "https://phalldavid.github.io/tour/images/test.jpg",
+      "hotSpots": [
+        { "type": "scene", "pitch": -3, "yaw": 90, "text": "Test Spot 2",  
+          "sceneId": "kitchen", "targetYaw": -90, "targetPitch": 0 }
+      ]
+    },
+    "kitchen": {
+      "title": "Kitchen",
+      "type": "equirectangular",
+      "panorama": "https://phalldavid.github.io/tour/images/kitchen.jpg",
+      "hotSpots": [
+        { "type": "scene", "pitch": -2, "yaw": -90, "text": "Living room",
+          "sceneId": "living_room", "targetYaw": 90, "targetPitch": 0 }
+      ]
+    }
+  }
+}
